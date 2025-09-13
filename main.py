@@ -123,17 +123,29 @@ async def run_servers():
     logger.info("Starting Discord bot with slash commands...")
 
     try:
-        # Start bot first to ensure it's ready before API starts
+        # Create tasks for both services
+        api_task = asyncio.create_task(server.serve())
         bot_task = asyncio.create_task(discord_bot.start())
 
-        # Wait a moment for bot to initialize
-        await asyncio.sleep(2)
+        # Wait for either task to complete or fail
+        done, pending = await asyncio.wait(
+            [api_task, bot_task],
+            return_when=asyncio.FIRST_COMPLETED
+        )
 
-        # Start API server
-        api_task = asyncio.create_task(server.serve())
+        # If one task completes, cancel the other
+        for task in pending:
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
 
-        # Run both tasks concurrently
-        await asyncio.gather(api_task, bot_task, return_exceptions=True)
+        # Check if any task failed
+        for task in done:
+            if task.exception():
+                logger.error(f"Task failed with exception: {task.exception()}")
+                raise task.exception()
 
     except Exception as e:
         logger.error(f"Error in run_servers: {e}")
