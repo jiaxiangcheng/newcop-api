@@ -28,6 +28,12 @@ class DiscordBot:
             try:
                 synced = await self.tree.sync()
                 logger.info(f'Synced {len(synced)} slash commands')
+
+                # Register bot client with Discord service
+                from discord_service import discord_service
+                discord_service.set_bot_client(self.client)
+                logger.info('Bot client registered with Discord service')
+
             except Exception as e:
                 logger.error(f'Failed to sync slash commands: {e}')
     

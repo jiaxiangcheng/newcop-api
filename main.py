@@ -101,7 +101,15 @@ async def delete_discord_message(request: DeleteMessageRequest):
 @app.get("/health")
 async def health_check():
     """Health check endpoint"""
-    return {"status": "healthy", "service": "discord-message-deletion-api"}
+    from discord_service import discord_service
+
+    discord_status = "ready" if discord_service.is_ready() else "not_ready"
+
+    return {
+        "status": "healthy",
+        "service": "discord-message-deletion-api",
+        "discord_bot_status": discord_status
+    }
 
 async def run_servers():
     """Run both FastAPI server and Discord bot concurrently"""
@@ -114,51 +122,22 @@ async def run_servers():
     logger.info(f"Starting Discord Message Deletion API on {API_HOST}:{API_PORT}")
     logger.info("Starting Discord bot with slash commands...")
 
-    # Create tasks for both services
-    api_task = None
-    bot_task = None
-
     try:
-        # Start both services as separate tasks
-        api_task = asyncio.create_task(server.serve())
+        # Start bot first to ensure it's ready before API starts
         bot_task = asyncio.create_task(discord_bot.start())
 
-        # Wait for both tasks to complete, but handle exceptions gracefully
-        done, pending = await asyncio.wait(
-            [api_task, bot_task],
-            return_when=asyncio.FIRST_EXCEPTION
-        )
+        # Wait a moment for bot to initialize
+        await asyncio.sleep(2)
 
-        # Check for exceptions in completed tasks
-        for task in done:
-            if task.exception():
-                logger.error(f"Task {task} failed with exception: {task.exception()}")
-                # Cancel pending tasks
-                for pending_task in pending:
-                    pending_task.cancel()
-                raise task.exception()
+        # Start API server
+        api_task = asyncio.create_task(server.serve())
 
-        # If we reach here, both tasks completed successfully
-        logger.info("Both API server and Discord bot completed successfully")
+        # Run both tasks concurrently
+        await asyncio.gather(api_task, bot_task, return_exceptions=True)
 
     except Exception as e:
         logger.error(f"Error in run_servers: {e}")
-
-        # Clean shutdown
-        if bot_task and not bot_task.done():
-            logger.info("Stopping Discord bot...")
-            bot_task.cancel()
-            try:
-                await discord_bot.stop()
-            except Exception as bot_error:
-                logger.error(f"Error stopping bot: {bot_error}")
-
-        if api_task and not api_task.done():
-            logger.info("Stopping API server...")
-            api_task.cancel()
-            if hasattr(server, 'should_exit'):
-                server.should_exit = True
-
+        # Graceful shutdown will be handled by signal handlers
         raise
 
 def setup_signal_handlers():

@@ -1,7 +1,6 @@
 import discord
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 import logging
-from config import DISCORD_BOT_TOKEN
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
@@ -9,67 +8,53 @@ logger = logging.getLogger(__name__)
 
 class DiscordService:
     def __init__(self):
-        # Set up Discord client with necessary intents for API operations
-        intents = discord.Intents.default()
-        intents.message_content = True
-        intents.guilds = True
-        
-        self.client = discord.Client(intents=intents)
-        self.token = DISCORD_BOT_TOKEN
-        
-    async def connect(self):
-        """Connect to Discord"""
-        try:
-            if not self.client.is_closed():
-                await self.client.close()
-            
-            # Create a new client instance for fresh connection
-            intents = discord.Intents.default()
-            intents.message_content = True
-            intents.guilds = True
-            self.client = discord.Client(intents=intents)
-            
-            await self.client.login(self.token)
-            logger.info("Discord API client logged in successfully")
-        except discord.LoginFailure as e:
-            logger.error(f"Failed to login to Discord: {e}")
-            raise
-        except Exception as e:
-            logger.error(f"Unexpected error during login: {e}")
-            raise
-    
-    async def disconnect(self):
-        """Disconnect from Discord"""
-        try:
-            await self.client.close()
-            logger.info("Discord client disconnected")
-        except Exception as e:
-            logger.error(f"Error during disconnect: {e}")
+        self._bot_client: Optional[discord.Client] = None
+
+    def set_bot_client(self, client: discord.Client):
+        """Set the Discord bot client to use for API operations"""
+        self._bot_client = client
+        logger.info("Discord service configured to use bot client")
+
+    def is_ready(self) -> bool:
+        """Check if the Discord bot client is ready"""
+        return self._bot_client is not None and self._bot_client.is_ready()
     
     async def search_and_delete_messages(
-        self, 
-        channel_id: int, 
+        self,
+        channel_id: int,
         order_id: str,
         limit: int = 50
     ) -> Dict[str, Any]:
         """
         Search for messages in a channel and delete those matching the order ID
-        
+
         Args:
             channel_id: Discord channel ID
             order_id: Order ID to match in webhook messages
             limit: Maximum number of messages to search (default: 50)
-            
+
         Returns:
             Dict with operation results
         """
         try:
-            # Always create a fresh connection for each request
-            await self.connect()
-            
-            # Fetch the channel from Discord API
+            # Check if bot client is available and ready
+            if not self._bot_client:
+                return {
+                    "success": False,
+                    "error": "Discord bot client not configured",
+                    "deleted_count": 0
+                }
+
+            if not self._bot_client.is_ready():
+                return {
+                    "success": False,
+                    "error": "Discord bot is not ready yet, please try again",
+                    "deleted_count": 0
+                }
+
+            # Fetch the channel using the bot client
             try:
-                channel = await self.client.fetch_channel(channel_id)
+                channel = await self._bot_client.fetch_channel(channel_id)
             except discord.NotFound:
                 return {
                     "success": False,
@@ -177,9 +162,6 @@ class DiscordService:
                 "error": str(e),
                 "deleted_count": 0
             }
-        finally:
-            # Disconnect after operation
-            await self.disconnect()
 
 # Global instance
 discord_service = DiscordService()
