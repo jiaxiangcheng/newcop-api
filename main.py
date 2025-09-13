@@ -37,7 +37,9 @@ class DeleteMessageResponse(BaseModel):
 async def root():
     """Root endpoint"""
     return {
-        "message": "Discord Message Deletion API",
+        "message": "App is running",
+        "status": "healthy",
+        "service": "Discord Message Deletion API",
         "version": "1.0.0",
         "endpoints": {
             "POST /delete-discord-message": "Delete Discord messages matching order ID"
