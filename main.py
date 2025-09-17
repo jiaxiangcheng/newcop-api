@@ -24,6 +24,8 @@ class DeleteMessageRequest(BaseModel):
     channel_id: int = Field(..., description="Discord channel ID where to search for messages")
     order_id: str = Field(..., description="Order ID to match in webhook messages")
     limit: Optional[int] = Field(100, description="Maximum number of messages to search (default: 100)")
+    title: Optional[str] = Field(None, description="Product title to match if order_id doesn't match")
+    variant: Optional[str] = Field(None, description="Size/variant to match if order_id doesn't match")
 
 class DeleteMessageResponse(BaseModel):
     """Response model for delete-discord-message endpoint"""
@@ -62,26 +64,29 @@ async def root():
 @app.post("/delete-discord-message", response_model=DeleteMessageResponse)
 async def delete_discord_message(request: DeleteMessageRequest):
     """
-    Delete Discord messages that match the specified order ID
-    
+    Delete Discord messages that match the specified order ID, with fallback to title/variant matching
+
     This endpoint searches for webhook messages in a Discord channel that contain
-    the specified order ID, then deletes matching messages.
-    
+    the specified order ID. If no order ID match is found and title/variant are provided,
+    it will attempt to match messages based on embed title and size/variant fields.
+
     Args:
-        request: DeleteMessageRequest containing order ID
-        
+        request: DeleteMessageRequest containing order ID and optional title/variant
+
     Returns:
         DeleteMessageResponse with operation results
     """
     try:
         logger.info(f"Processing delete request for channel {request.channel_id}")
-        logger.info(f"Search criteria - Order ID: {request.order_id}")
-        
+        logger.info(f"Search criteria - Order ID: {request.order_id}, Title: {request.title}, Variant: {request.variant}")
+
         # Call the Discord service to search and delete messages
         result = await discord_service.search_and_delete_messages(
             channel_id=request.channel_id,
             order_id=request.order_id,
-            limit=request.limit
+            limit=request.limit,
+            title=request.title,
+            variant=request.variant
         )
         
         if result["success"]:
