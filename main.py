@@ -80,6 +80,33 @@ async def delete_discord_message(request: DeleteMessageRequest):
         logger.info(f"Processing delete request for channel {request.channel_id}")
         logger.info(f"Search criteria - Order ID: {request.order_id}, Title: {request.title}, Variant: {request.variant}")
 
+        # Check if Discord bot is ready, with extended retry logic for cold starts
+        max_wait_time = 60  # Total maximum wait time in seconds (for Heroku cold starts)
+        retry_delay = 3  # Initial retry delay
+        max_retry_delay = 10  # Maximum retry delay
+        total_waited = 0
+
+        while not discord_service.is_ready() and total_waited < max_wait_time:
+            # Log progress to help with debugging
+            remaining_time = max_wait_time - total_waited
+            logger.info(f"Discord bot not ready, waiting {retry_delay}s... (waited: {total_waited}s, remaining: {remaining_time}s)")
+
+            await asyncio.sleep(retry_delay)
+            total_waited += retry_delay
+
+            # Gradually increase retry delay for efficiency (exponential backoff)
+            retry_delay = min(retry_delay * 1.2, max_retry_delay)
+
+        # Final check
+        if not discord_service.is_ready():
+            logger.error(f"Discord bot is not ready after {max_wait_time}s - this may be a Heroku cold start issue")
+            raise HTTPException(
+                status_code=503,
+                detail=f"Discord bot is not ready after {max_wait_time}s. This may be due to a cold start. Please try again in 30-60 seconds."
+            )
+
+        logger.info("Discord bot is ready, processing request")
+
         # Call the Discord service to search and delete messages
         result = await discord_service.search_and_delete_messages(
             channel_id=request.channel_id,
@@ -88,14 +115,16 @@ async def delete_discord_message(request: DeleteMessageRequest):
             title=request.title,
             variant=request.variant
         )
-        
+
         if result["success"]:
             logger.info(f"Successfully processed request. Deleted {result['deleted_count']} messages")
         else:
             logger.error(f"Request failed: {result.get('error', 'Unknown error')}")
-        
+
         return DeleteMessageResponse(**result)
-        
+
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Unexpected error in delete_discord_message: {e}")
         raise HTTPException(
@@ -105,15 +134,31 @@ async def delete_discord_message(request: DeleteMessageRequest):
 
 @app.get("/health")
 async def health_check():
-    """Health check endpoint"""
+    """Health check endpoint with detailed status for cold start monitoring"""
     from discord_service import discord_service
+    import time
 
-    discord_status = "ready" if discord_service.is_ready() else "not_ready"
+    discord_ready = discord_service.is_ready()
+    discord_status = "ready" if discord_ready else "not_ready"
+
+    # Determine overall service status
+    if discord_ready:
+        overall_status = "healthy"
+        message = "Service fully operational"
+    else:
+        overall_status = "starting"
+        message = "Discord bot initializing - API requests will wait for readiness"
 
     return {
-        "status": "healthy",
+        "status": overall_status,
+        "message": message,
         "service": "discord-message-deletion-api",
-        "discord_bot_status": discord_status
+        "discord_bot_status": discord_status,
+        "timestamp": int(time.time()),
+        "cold_start_info": {
+            "note": "On Heroku cold starts, Discord bot may take 30-60s to initialize",
+            "recommendation": "Wait for discord_bot_status: 'ready' before making API calls"
+        }
     }
 
 async def run_servers():
@@ -124,13 +169,34 @@ async def run_servers():
     config = uvicorn.Config(app, host=API_HOST, port=API_PORT, log_level="info")
     server = uvicorn.Server(config)
 
-    logger.info(f"Starting Discord Message Deletion API on {API_HOST}:{API_PORT}")
     logger.info("Starting Discord bot with slash commands...")
+    logger.info(f"Starting Discord Message Deletion API on {API_HOST}:{API_PORT}")
 
     try:
-        # Create tasks for both services
-        api_task = asyncio.create_task(server.serve())
+        # Start Discord bot first
         bot_task = asyncio.create_task(discord_bot.start())
+
+        # Wait a moment for bot to initialize
+        await asyncio.sleep(1)
+
+        # Wait for bot to be ready before starting API server (with longer timeout for cold starts)
+        max_wait = 45  # seconds - increased for Heroku cold starts
+        wait_interval = 2  # seconds - slightly longer intervals
+        waited = 0
+
+        while not discord_service.is_ready() and waited < max_wait:
+            logger.info(f"Waiting for Discord bot to be ready... ({waited}s/{max_wait}s)")
+            await asyncio.sleep(wait_interval)
+            waited += wait_interval
+
+        if discord_service.is_ready():
+            logger.info("Discord bot is ready! Starting API server...")
+        else:
+            logger.warning(f"Discord bot not ready after {max_wait}s, starting API server anyway (cold start scenario)")
+            logger.warning("API requests will handle bot readiness checks with extended timeouts")
+
+        # Start API server
+        api_task = asyncio.create_task(server.serve())
 
         # Wait for either task to complete or fail
         done, pending = await asyncio.wait(
